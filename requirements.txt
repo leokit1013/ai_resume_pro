@@ -18,6 +18,7 @@ soundfile
 streamlit-extras
 flask_cors
 razorpay
+bcrypt
 
 # python -m spacy download en_core_web_sm
 # for pymupdf to work properly, you may need to install additional system dependencies:
@@ -30,4 +31,5 @@ razorpay
 # for pymupdf to work properly, you may need to install additional system dependencies:
 # sudo apt update
 # sudo apt install libpango-1.0-0 libpango1.0-dev
+
 
