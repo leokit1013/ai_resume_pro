@@ -1,45 +1,41 @@
-import os
-import re
-import tempfile
-import unicodedata
-from datetime import date
-from io import BytesIO
-import xml.etree.ElementTree as ET
-import re
-import streamlit as st
-
-import io
-
-
-import streamlit as st
-
-import av
-import numpy as np
-import pandas as pd
-import requests
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-import streamlit as st
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase
-
-from PIL import Image
-from PyPDF2 import PdfReader
-from docx import Document
-from dotenv import load_dotenv
-from langdetect import detect
-import easyocr
-import fitz
-from fpdf import FPDF
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.pdfgen import canvas
-
-import google.generativeai as genai
-
-
-# from weasyprint import HTML
+from import_python_packages import *
 
 st.set_page_config(page_title="Check And Fix Against JD", layout="wide")
+
+
+if "token" not in st.session_state:
+    st.switch_page("login.py")
+
+res = requests.post(f"{BACKEND_URL}/validate-token", json={"token": st.session_state["token"]})
+if res.status_code != 200:
+    st.switch_page("login.py")
+    
+# hide navbar and footer
+hide_st_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    [data-testid="stSidebarNav"] {display: none;}
+    </style>
+"""
+st.markdown(hide_st_style, unsafe_allow_html=True)
+
+if "email" not in st.session_state:
+    st.warning("Please login to access this page.")
+    st.switch_page("app.py")
+
+if st.session_state["usage_count"] >= 50 and not st.session_state["subscribed"]:
+    st.warning("You've exceeded your free limit.")
+    if st.button("Go to Payment Page"):
+        st.switch_page("pages/payment_page.py")
+    st.stop()
+
+# Call update once only
+if "used_this_tool" not in st.session_state:
+    update_usage(st.session_state["email"])
+    st.session_state["usage_count"] += 1
+    st.session_state["used_this_tool"] = True
 
 
 load_dotenv()
@@ -569,6 +565,10 @@ def show_fix_screen():
 
 
 
+    
+
+
+
 def auto_fix_resume(resume_text: str, suggestion: str, job_desc: str = "") -> str:
     """
     Applies a recommendation to the resume intelligently, so it aligns with the job description.
@@ -772,6 +772,10 @@ def apply_suggestion(resume_text: str, suggestion: str, job_desc: str = "") -> s
         updated_text += f"\n\nNote: {suggestion}"
 
     return updated_text
+
+
+
+
 
 
 if __name__ == "__main__":
