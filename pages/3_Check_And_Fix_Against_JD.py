@@ -1,41 +1,45 @@
-from import_python_packages import *
+import os
+import re
+import tempfile
+import unicodedata
+from datetime import date
+from io import BytesIO
+import xml.etree.ElementTree as ET
+import re
+import streamlit as st
+
+import io
+
+
+import streamlit as st
+
+import av
+import numpy as np
+import pandas as pd
+import requests
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import streamlit as st
+from streamlit_webrtc import webrtc_streamer, AudioProcessorBase
+
+from PIL import Image
+from PyPDF2 import PdfReader
+from docx import Document
+from dotenv import load_dotenv
+from langdetect import detect
+import easyocr
+import fitz
+from fpdf import FPDF
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.pdfgen import canvas
+
+import google.generativeai as genai
+
+
+# from weasyprint import HTML
 
 st.set_page_config(page_title="Check And Fix Against JD", layout="wide")
-
-
-if "token" not in st.session_state:
-    st.switch_page("login.py")
-
-res = requests.post(f"{BACKEND_URL}/validate-token", json={"token": st.session_state["token"]})
-if res.status_code != 200:
-    st.switch_page("login.py")
-    
-# hide navbar and footer
-hide_st_style = """
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    [data-testid="stSidebarNav"] {display: none;}
-    </style>
-"""
-st.markdown(hide_st_style, unsafe_allow_html=True)
-
-if "email" not in st.session_state:
-    st.warning("Please login to access this page.")
-    st.switch_page("app.py")
-
-if st.session_state["usage_count"] >= 50 and not st.session_state["subscribed"]:
-    st.warning("You've exceeded your free limit.")
-    if st.button("Go to Payment Page"):
-        st.switch_page("pages/payment_page.py")
-    st.stop()
-
-# Call update once only
-if "used_this_tool" not in st.session_state:
-    update_usage(st.session_state["email"])
-    st.session_state["usage_count"] += 1
-    st.session_state["used_this_tool"] = True
 
 
 load_dotenv()
@@ -85,6 +89,26 @@ def download_resume_pdf(resume_text):
     )
 
 
+def download_resume_docx(resume_text):
+    """Generate a DOCX from resume text and make it downloadable."""
+    buffer = io.BytesIO()
+
+    # Create DOCX with python-docx
+    doc = Document()
+    for line in resume_text.split("\n"):
+        doc.add_paragraph(line)
+    doc.save(buffer)
+
+    buffer.seek(0)
+
+    # Streamlit download button
+    st.download_button(
+        label="📄 Download DOCX",
+        data=buffer,
+        file_name="resume.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
 def summarize_with_gemini(prompt: str) -> str | None:
     """
     Sends a prompt to the Gemini model and returns the generated text.
@@ -119,33 +143,14 @@ def generate_resume_suggestions(resume_text: str, job_description: str) -> list:
 
     # Generate suggestions via Gemini
     suggestions_text = summarize_with_gemini(prompt)
+    
     if not suggestions_text:
         return []
 
     # Extract individual suggestions from bullets
-    suggestions = re.findall(r"- (.+)", suggestions_text)
+    suggestions = re.findall(r"[-*]\s*(.+)", suggestions_text)
     return suggestions
 
-
-def download_resume_docx(resume_text):
-    """Generate a DOCX from resume text and make it downloadable."""
-    buffer = io.BytesIO()
-
-    # Create DOCX with python-docx
-    doc = Document()
-    for line in resume_text.split("\n"):
-        doc.add_paragraph(line)
-    doc.save(buffer)
-
-    buffer.seek(0)
-
-    # Streamlit download button
-    st.download_button(
-        label="📄 Download DOCX",
-        data=buffer,
-        file_name="resume.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
 
 def create_pdf(content):
     buffer = BytesIO()
@@ -256,6 +261,83 @@ def main():
     elif st.session_state.screen == "fix":
         show_fix_screen()
 
+import re
+import streamlit as st
+
+def score_resume(resume_text, job_desc):
+
+    job_desc = st.session_state.get("job_desc", "")
+    resume_text = st.session_state.get("resume_text", "")
+    
+    if "resume_text" not in st.session_state or "job_desc" not in st.session_state:
+        st.warning("Please make sure both Resume and Job Description are available.")
+        return None, None
+
+    default_prompt = """
+    You are an expert career coach and resume optimization specialist.
+
+    Your task: Compare the candidate's resume to the provided job description
+    and provide feedback to improve their chances.
+
+    Job Description:
+    {requirement}
+
+    Candidate Resume:
+    {text}
+
+    Output format (STRICTLY follow this):
+
+    ```
+    Overall Score: XX
+    Skills Score: XX
+    Experience Score: XX
+    ATS Compatibility Score: XX
+    Recommendations:
+    - Add missing keywords: Keyword1, Keyword2
+    - Include the job title in your summary
+    - Mention leadership in the experience section
+    ```
+    """.strip()
+
+    final_prompt = default_prompt.format(
+        requirement=job_desc.strip(),
+        text=resume_text.strip()
+    )
+
+    with st.spinner("🔍 Re-analyzing resume..."):
+        summary = summarize_with_gemini(final_prompt)
+
+    if not summary:
+        st.warning("No new score generated.")
+        return None, None
+
+    st.session_state.summary = summary
+
+    # Safe regex extraction helper
+    def safe_extract(pattern, default=0):
+        match = re.search(pattern, summary)
+        return int(match.group(1)) if match else default
+
+    st.session_state.scores = {
+        "overall": safe_extract(r"Overall Score:\s*(\d+)"),
+        "skills": safe_extract(r"Skills Score:\s*(\d+)"),
+        "experience": safe_extract(r"Experience Score:\s*(\d+)"),
+        "ats": safe_extract(r"ATS Compatibility Score:\s*(\d+)")
+    }
+
+    st.session_state.recommendations = re.findall(r"- (.+)", summary)
+
+    st.session_state.all_scores = {
+        "overall": st.session_state.scores["overall"],
+        "sections": {
+            "Skills": st.session_state.scores["skills"],
+            "Experience": st.session_state.scores["experience"],
+            "ATS Compatibility": st.session_state.scores["ats"]
+        }
+    }
+
+    return st.session_state.scores, st.session_state.all_scores
+
 def show_main_screen():
 
     st.markdown(
@@ -285,6 +367,9 @@ def show_main_screen():
     run_check = st.button("🚀 Check My Resume", use_container_width=True)
 
     if run_check:
+
+
+        
         if not job_input.strip():
             st.warning("⚠️ Please enter the job description.")
             return
@@ -296,62 +381,12 @@ def show_main_screen():
         st.session_state.resume_text = resume_text  # Store for live editing
         st.session_state.job_desc = job_input.strip()
 
-        # Candidate-focused prompt
-        default_prompt = """
-        You are an expert career coach and resume optimization specialist.
+        job_desc = st.session_state.get("job_desc", "")
+        resume_text = st.session_state.get("resume_text", "")
+                
+        st.session_state.scores, st.session_state.all_scores = score_resume(resume_text, job_desc)
 
-        Your task: Compare the candidate's resume to the provided job description
-        and provide feedback to improve their chances.
-
-        Job Description:
-        {requirement}
-
-        Candidate Resume:
-        {text}
-
-        Output format (STRICTLY follow this):
-
-        ```
-        Overall Score: XX
-        Skills Score: XX
-        Experience Score: XX
-        ATS Compatibility Score: XX
-        Recommendations:
-        - Add missing keywords: Keyword1, Keyword2
-        - Include the job title in your summary
-        - Mention leadership in the experience section
-        ```
-        """.strip()
-
-        final_prompt = default_prompt.format(requirement=job_input.strip(), text=resume_text.strip())
-        with st.spinner("🔍 Analyzing resume..."):
-            summary = summarize_with_gemini(final_prompt)
-
-        if summary:
-            st.session_state.summary = summary  # <-- store summary in session state
-        else:
-            st.session_state.summary = None
-
-    if st.session_state.get("summary"):
-        summary = st.session_state.summary
-
-        # Parse scores
-        st.session_state.scores["overall"] = int(re.search(r"Overall Score:\s*(\d+)", summary).group(1))
-        st.session_state.scores["skills"] = int(re.search(r"Skills Score:\s*(\d+)", summary).group(1))
-        st.session_state.scores["experience"] = int(re.search(r"Experience Score:\s*(\d+)", summary).group(1))
-        st.session_state.scores["ats"] = int(re.search(r"ATS Compatibility Score:\s*(\d+)", summary).group(1))
-        st.session_state.recommendations = re.findall(r"- (.+)", summary)
-
-        st.session_state.all_scores = {
-            "overall": st.session_state.scores["overall"],
-            "sections": {
-                "Skills": st.session_state.scores["skills"],
-                "Experience": st.session_state.scores["experience"],
-                "ATS Compatibility": st.session_state.scores["ats"] 
-            }
-        }
-        # Show scores
-        overall_score = st.session_state.scores["overall"]
+        overall_score = st.session_state.scores.get("overall", 0)
         st.subheader("📊 Match Score")
         st.markdown(
             f"<h1 style='color:#00BFA5;text-align:center;'>{overall_score}</h1><p style='text-align:center;'>Resume Match Score</p>",
@@ -440,70 +475,303 @@ def show_fix_screen():
     st.subheader("💡 Suggestions")
     resume_text = st.session_state.get("resume_text", "")
     job_desc = st.session_state.get("job_desc", "")
+    print(f"Resume Text: {resume_text[:50]}...")  # Debugging output
+    print(f"Job Description: {job_desc[:50]}...")  # Debugging output
 
-    if resume_text and job_desc:
-        st.session_state.recommendations = generate_resume_suggestions(resume_text, job_desc)
+    if resume_text and job_desc and "recommendations" not in st.session_state:
+        try:
+            st.session_state.recommendations = generate_resume_suggestions(resume_text, job_desc)
+        except Exception as e:
+            st.error(f"Failed to generate suggestions: {e}")
 
     if "recommendations" in st.session_state and st.session_state.recommendations:
         for i, rec in enumerate(st.session_state.recommendations):
             st.markdown(f"**{i+1}.** {rec}")
 
-            if st.button(f"Apply Suggestion {i+1}", key=f"apply_{i}"):
-                st.session_state.resume_text = apply_suggestion(st.session_state.resume_text, rec)
+            # Apply Suggestion intelligently
+            if st.button(f"Apply Suggestion  {i+1}", key=f"apply_{i}"):
+                st.session_state.resume_text = auto_fix_resume(
+                    st.session_state.resume_text, rec, st.session_state.get("job_desc", "")
+                )
+                
+                st.session_state.suggestions_applied = True
                 st.session_state.screen = "fix"
                 st.rerun()
+                
  
     else:
         st.info("No suggestions available.")
 
     st.markdown("---")
 
-    # ---- ACTIONS ----
+    st.subheader("⚡ Final Fine-Tune & Recheck")
+    if st.button("📝 Fine-Tune Resume"):
+        if not st.session_state.get("suggestions_applied", False):
+            st.warning("⚠ Please apply at least one suggestion before fine-tuning.")
+        else:
+            with st.spinner("🔍 Fine-tuning resume with Gemini..."):
+                job_desc = st.session_state.get("job_desc", "")
+                resume_text = st.session_state.get("resume_text", "")
+
+                if resume_text and job_desc:
+                    
+                    default_prompt = f"""
+                        You are an expert resume coach. Refine the following resume so it perfectly aligns with the Job Description.
+                        
+                        Job Description:
+                        {job_desc}
+
+                        Resume:
+                        {resume_text}
+
+                        Output a polished, ready-to-use resume text.
+                        """.strip()
+
+                    final_prompt = default_prompt.format(requirement=job_desc.strip(), text=resume_text.strip())
+                    final_resume = summarize_with_gemini(final_prompt)
+
+                    if final_resume:
+                        st.session_state.resume_text = final_resume
+                        st.success("✅ Resume fine-tuned successfully!")
+                        
+                        # Show preview
+                        st.subheader("📄 Updated Resume Preview")
+                        st.text_area("Your Updated Resume:", value=final_resume, height=400)
+                        st.session_state.recheck_updated_resume_score = True
+
+                        # Download buttons
+                        cols = st.columns(2)  # 2 equal columns
+
+                        with cols[0]:
+                            if st.button("⬇ Updated Resume as PDF", use_container_width=True):
+                                download_resume_pdf(st.session_state.resume_text)
+
+                        with cols[1]:
+                            if st.button("⬇ Updated Resume as DOCX", use_container_width=True):
+                                download_resume_docx(st.session_state.resume_text)                        
+
+                else:
+                    st.warning("Please make sure both Resume and Job Description are available.")
+    
+    # ---- Recheck Score ----
+    st.markdown("---")
     if st.button("🔄 Recheck Score"):
-        st.session_state.scores = score_resume(st.session_state.resume_text)
-        st.session_state.screen = "main"
-        st.rerun()
+        if not st.session_state.get("recheck_updated_resume_score", False):
+            st.warning("⚠ Please apply at least one suggestion before fine-tuning.")
+        else:    
+            job_desc = st.session_state.get("job_desc", "")
+            resume_text = st.session_state.get("resume_text", "")
+            if resume_text and job_desc:
+                st.session_state.scores, st.session_state.all_scores = score_resume(resume_text, job_desc)
+                st.success("✅ Scores updated!")
+            else:
+                st.warning("Please make sure both Resume and Job Description are available.")
 
 
-def apply_suggestion(resume_text, suggestion):
+
+def auto_fix_resume(resume_text: str, suggestion: str, job_desc: str = "") -> str:
     """
-    Applies suggestion to resume text:
-    - Adds missing keywords
-    - Includes job title
-    - Mentions leadership
+    Applies a recommendation to the resume intelligently, so it aligns with the job description.
+    Handles:
+        - Skills / missing keywords
+        - Professional Summary / Job Title
+        - Experience / Leadership
+        - Certifications
+        - Extracurriculars
+        - Publications
+        - Fallback: generic notes
     """
     updated_text = resume_text
 
-    # Add keywords
+    # --- 1️⃣ Add missing keywords to Skills ---
     keyword_match = re.search(r"Add missing keywords?:\s*(.+)", suggestion, re.IGNORECASE)
     if keyword_match:
-        keywords = keyword_match.group(1).split(",")
-        updated_text += "\n\nSkills:\n" + ", ".join([kw.strip() for kw in keywords])
+        keywords = [kw.strip() for kw in keyword_match.group(1).split(",")]
+        skills_match = re.search(r"Skills\s*:([\s\S]*?)(\n\n|$)", updated_text, re.IGNORECASE)
+        if skills_match:
+            existing_skills = [s.strip() for s in skills_match.group(1).split(",") if s.strip()]
+            all_skills = list(dict.fromkeys(existing_skills + keywords))
+            updated_text = re.sub(
+                r"Skills\s*:([\s\S]*?)(\n\n|$)",
+                f"Skills: {', '.join(all_skills)}\n\n",
+                updated_text,
+                flags=re.IGNORECASE
+            )
+        else:
+            updated_text += "\n\nSkills: " + ", ".join(keywords)
 
-    # Include job title
-    if "Include the job title" in suggestion:
-        updated_text = f"Professional Summary:\n[JOB TITLE HERE] — " + updated_text
+    # --- 2️⃣ Include Job Title in Professional Summary ---
+    if "include the job title" in suggestion.lower() and job_desc:
+        job_title_match = re.search(r"(?:Job Title:|Title:)?\s*(.+?)(?:\n|$)", job_desc, re.IGNORECASE)
+        job_title = job_title_match.group(1).strip() if job_title_match else "JOB TITLE"
+        summary_match = re.search(r"Professional Summary\s*:([\s\S]*?)(\n\n|$)", updated_text, re.IGNORECASE)
+        if summary_match:
+            existing_summary = summary_match.group(1)
+            updated_text = re.sub(
+                r"Professional Summary\s*:([\s\S]*?)(\n\n|$)",
+                f"Professional Summary: {job_title} — {existing_summary}\n\n",
+                updated_text,
+                flags=re.IGNORECASE
+            )
+        else:
+            updated_text = f"Professional Summary: {job_title}\n\n" + updated_text
 
-    # Mention leadership
-    if "leadership" in suggestion.lower():
-        updated_text += "\n\nExperience:\n- Demonstrated leadership in managing projects and teams."
+    # --- 3️⃣ Add Leadership / Experience lines ---
+    if "leadership" in suggestion.lower() or "experience" in suggestion.lower():
+        leadership_line = "- Demonstrated leadership in managing projects and teams."
+        exp_match = re.search(r"Experience\s*:([\s\S]*?)(\n\n|$)", updated_text, re.IGNORECASE)
+        if exp_match:
+            existing_exp = exp_match.group(1)
+            if leadership_line not in existing_exp:
+                updated_text = re.sub(
+                    r"Experience\s*:([\s\S]*?)(\n\n|$)",
+                    f"Experience: {existing_exp}\n{leadership_line}\n\n",
+                    updated_text,
+                    flags=re.IGNORECASE
+                )
+        else:
+            updated_text += "\n\nExperience:\n" + leadership_line
+
+    # --- 4️⃣ Add Certifications ---
+    cert_match = re.search(r"Add relevant certifications?:\s*(.+)", suggestion, re.IGNORECASE)
+    if cert_match:
+        certs = [c.strip() for c in cert_match.group(1).split(",")]
+        cert_section = re.search(r"Certifications\s*:([\s\S]*?)(\n\n|$)", updated_text, re.IGNORECASE)
+        if cert_section:
+            existing = [c.strip() for c in cert_section.group(1).split(",") if c.strip()]
+            all_certs = list(dict.fromkeys(existing + certs))
+            updated_text = re.sub(
+                r"Certifications\s*:([\s\S]*?)(\n\n|$)",
+                f"Certifications: {', '.join(all_certs)}\n\n",
+                updated_text,
+                flags=re.IGNORECASE
+            )
+        else:
+            updated_text += "\n\nCertifications: " + ", ".join(certs)
+
+    # --- 5️⃣ Add Extracurriculars ---
+    extra_match = re.search(r"Add relevant extracurriculars?:\s*(.+)", suggestion, re.IGNORECASE)
+    if extra_match:
+        extras = [e.strip() for e in extra_match.group(1).split(",")]
+        extra_section = re.search(r"Extracurriculars\s*:([\s\S]*?)(\n\n|$)", updated_text, re.IGNORECASE)
+        if extra_section:
+            existing = [e.strip() for e in extra_section.group(1).split(",") if e.strip()]
+            all_extras = list(dict.fromkeys(existing + extras))
+            updated_text = re.sub(
+                r"Extracurriculars\s*:([\s\S]*?)(\n\n|$)",
+                f"Extracurriculars: {', '.join(all_extras)}\n\n",
+                updated_text,
+                flags=re.IGNORECASE
+            )
+        else:
+            updated_text += "\n\nExtracurriculars: " + ", ".join(extras)
+
+    # --- 6️⃣ Add Publications ---
+    pub_match = re.search(r"Add publications?:\s*(.+)", suggestion, re.IGNORECASE)
+    if pub_match:
+        pubs = [p.strip() for p in pub_match.group(1).split(",")]
+        pub_section = re.search(r"Publications\s*:([\s\S]*?)(\n\n|$)", updated_text, re.IGNORECASE)
+        if pub_section:
+            existing = [p.strip() for p in pub_section.group(1).split(",") if p.strip()]
+            all_pubs = list(dict.fromkeys(existing + pubs))
+            updated_text = re.sub(
+                r"Publications\s*:([\s\S]*?)(\n\n|$)",
+                f"Publications: {', '.join(all_pubs)}\n\n",
+                updated_text,
+                flags=re.IGNORECASE
+            )
+        else:
+            updated_text += "\n\nPublications: " + ", ".join(pubs)
+
+    # --- 7️⃣ Fallback: append any other suggestions ---
+    if not any([
+        keyword_match,
+        "include the job title" in suggestion.lower(),
+        "leadership" in suggestion.lower(),
+        cert_match,
+        extra_match,
+        pub_match
+    ]):
+        updated_text += f"\n\nNote: {suggestion}"
 
     return updated_text
 
 
-def score_resume(resume_text):
+def apply_suggestion(resume_text: str, suggestion: str, job_desc: str = "") -> str:
     """
-    Dummy scoring logic for now — replace with your AI/ML scoring call.
-    Returns a dict with different evaluation scores.
+    Applies a single recommendation to the resume intelligently.
+    
+    Handles:
+    - Adding missing keywords to Skills section without duplication
+    - Including the job title from the Job Description
+    - Mentioning leadership or other key skills in Experience
+    - Generic suggestions appended as notes if not recognized
     """
-    score = len(resume_text) % 100  # example: just a fake number for now
-    return {
-        "ATS Match Score": score,
-        "Keyword Coverage": min(100, score + 10),
-        "Readability": min(100, score + 5)
-    }
 
+    updated_text = resume_text
 
+    # 1️⃣ Add missing keywords
+    keyword_match = re.search(r"Add missing keywords?:\s*(.+)", suggestion, re.IGNORECASE)
+    if keyword_match:
+        keywords = [kw.strip() for kw in keyword_match.group(1).split(",")]
+
+        # Check if Skills section exists
+        skills_match = re.search(r"Skills\s*:([\s\S]*?)(\n\n|$)", updated_text, re.IGNORECASE)
+        if skills_match:
+            existing_skills = [s.strip() for s in skills_match.group(1).split(",") if s.strip()]
+            # Merge without duplicates
+            all_skills = list(dict.fromkeys(existing_skills + keywords))
+            updated_text = re.sub(
+                r"Skills\s*:([\s\S]*?)(\n\n|$)",
+                f"Skills: {', '.join(all_skills)}\n\n",
+                updated_text,
+                flags=re.IGNORECASE
+            )
+        else:
+            # Add Skills section if missing
+            updated_text += "\n\nSkills: " + ", ".join(keywords)
+
+    # 2️⃣ Include job title from JD
+    if "include the job title" in suggestion.lower() and job_desc:
+        # Extract job title (first line or first sentence from JD)
+        job_title_match = re.search(r"(?:Job Title:|Title:)?\s*(.+?)(?:\n|$)", job_desc, re.IGNORECASE)
+        job_title = job_title_match.group(1).strip() if job_title_match else "JOB TITLE"
+
+        # Insert or update Professional Summary
+        summary_match = re.search(r"Professional Summary\s*:\s*(.*)", updated_text, re.IGNORECASE)
+        if summary_match:
+            existing_summary = summary_match.group(1)
+            updated_text = re.sub(
+                r"Professional Summary\s*:\s*.*",
+                f"Professional Summary: {job_title} — {existing_summary}",
+                updated_text,
+                flags=re.IGNORECASE
+            )
+        else:
+            updated_text = f"Professional Summary: {job_title}\n\n" + updated_text
+
+    # 3️⃣ Mention leadership in Experience
+    if "leadership" in suggestion.lower():
+        exp_match = re.search(r"Experience\s*:([\s\S]*?)(\n\n|$)", updated_text, re.IGNORECASE)
+        leadership_line = "- Demonstrated leadership in managing projects and teams."
+        if exp_match:
+            existing_exp = exp_match.group(1)
+            # Avoid duplicate leadership lines
+            if leadership_line not in existing_exp:
+                updated_text = re.sub(
+                    r"Experience\s*:([\s\S]*?)(\n\n|$)",
+                    f"Experience: {existing_exp}\n{leadership_line}\n\n",
+                    updated_text,
+                    flags=re.IGNORECASE
+                )
+        else:
+            updated_text += "\n\nExperience:\n" + leadership_line
+
+    # 4️⃣ Fallback: append generic suggestions at the end
+    if not any(keyword_match or "include the job title" in suggestion.lower() or "leadership" in suggestion.lower()):
+        updated_text += f"\n\nNote: {suggestion}"
+
+    return updated_text
 
 
 if __name__ == "__main__":
